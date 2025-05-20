@@ -1,0 +1,355 @@
+---
+title: "Google Play Apps"
+format: 
+  dashboard:
+    theme: cosmo
+    page-layout: scroll
+    sidebar: 
+      background: light
+    font: 
+      heading: Roboto
+      base: Roboto
+server: shiny
+---
+
+
+``` {python}
+# Este dashboard interativo apresenta uma análise exploratória dos aplicativos disponíveis na Google Play Store.
+
+# Importação das bibliotecas principais
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from shiny import reactive
+from shiny import render, ui
+import seaborn as sns 
+
+# Leitura do arquivo e remoção de apps duplicados pelo nome
+apps = pd.read_csv('apps_data.csv').drop_duplicates(subset = "App")
+
+# Limpeza e conversão da coluna "Installs" para inteiro
+apps['Installs'] = apps['Installs'].str.replace('+', '', regex=False)
+apps['Installs'] = apps['Installs'].str.replace(',', '', regex=False)
+apps['Installs'] = pd.to_numeric(apps['Installs'], errors='coerce')
+
+# A análise trata  das categorias com mais de 50 aplicativos
+# Filtrando para categorias com mais de 50 apps
+frequencia = apps['Genres'].value_counts()
+categorias_validas = frequencia[frequencia > 50].index
+apps = apps[apps['Genres'].isin(categorias_validas)]
+
+# Define a paleta de cores baseada nas cores do Google
+google_colors = ["#3bccff", "#48ff48", "#ffd400", "#ff3333"]
+my_palette = sns.color_palette(google_colors, n_colors=50)
+sns.set_palette(my_palette)
+sns.set_style("whitegrid")
+
+# Conversão da data de atualização para tipo datetime
+apps["Last Updated"] = pd.to_datetime(apps["Last Updated"])
+# Cria coluna adicional com mês e ano (ex: 2020-05)
+apps["Atualizado em"] = apps["Last Updated"].dt.to_period("M").astype(str)
+
+```
+
+# {.sidebar}
+
+![](Google_Play_2022_logo.svg.png)
+
+Filtros
+
+``` {python}
+# Filtro por categoria de aplicativo (seleção múltipla)
+category = list(apps['Genres'].value_counts().index)
+ui.input_selectize('genres', 'Categorias', category, multiple = True)
+```
+
+``` {python}
+#Filtro de nome de app (texto)
+ui.input_text("text", "Nome do aplicativo", "") 
+
+# Filtro de classificação etária (seleção simples)
+classif_etaria = ['Todos'] + list(apps['Content Rating'].value_counts().index)
+ui.input_selectize('classif_etaria', 'Classificação etária', classif_etaria, selected="Todos")
+
+```
+
+``` {python}
+
+# Filtro de quantidade de downloads (slider)
+installs = list(apps['Installs'])
+ui.input_slider(
+    "installs", 
+    "Quantidade de downloads", 
+    min=0, 
+    max=500000000, 
+    value=[0,500000000]
+)
+
+# Filtro switch para aplicativos gratuitos
+free = list(apps['Type'])
+ui.input_switch("free", "Gratuito", False)  
+
+# Filtro de compatibilidade Android (seleção simples)
+version = ["Todos"] + list(apps['Android Ver'].value_counts().index)
+ui.input_select('version', 'Versão do Android compatível', version, selected="Todos")
+
+```
+
+```{python}
+
+# React para os inputs
+@reactive.calc
+def dados_filtrados():
+    df = apps.copy()
+
+    # Filtro por nome: busca apps que contenham o texto digitado (sem diferenciar maiúsculas/minúsculas)
+    nome = input.text().strip().lower()
+    if nome:
+        df = df[df["App"].str.lower().str.contains(nome, na=False)]
+
+    # Filtro por categorias selecionadas pelo usuário
+    categorias = input.genres()
+    if categorias:
+        df = df[df["Genres"].isin(categorias)]
+
+    # Filtro por classificação etária (ignora se "Todos" estiver selecionado)
+    classif = input.classif_etaria()
+    if classif and classif != "Todos":
+        df = df[df["Content Rating"] == classif]
+
+    # Filtro por faixa de downloads definida no slider
+    faixa = input.installs()
+    df = df[(df["Installs"] >= faixa[0]) & (df["Installs"] <= faixa[1])]
+
+    # Filtro por tipo gratuito (ativa se o botão switch estiver ligado)
+    if input.free():
+        df = df[df["Type"] == "Free"]
+
+    # Filtro por versão do Android (ignora se "Todos" estiver selecionado)
+    versao = input.version()
+    if versao and versao != "Todos":
+        df = df[df["Android Ver"] == versao]
+    return df
+```
+
+# Visão Geral
+
+``` {python}
+
+@render.plot
+def top10_categorias_downloads():
+    df = dados_filtrados()
+    fig, ax = plt.subplots(figsize=(12, 15))
+
+    if df.empty:
+        ax.text(0.5, 0.5, "Sem dados para o filtro", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    # Agrupamento por categoria e soma dos downloads
+    top = df.groupby("Genres")["Installs"].sum().sort_values(ascending=False).head(10)
+
+    # Gráfico de barras horizontais
+    sns.barplot(x=top.values, y=top.index, palette=my_palette, ax=ax)
+    ax.set_title("Top 10 Categorias com Mais Downloads")
+    ax.set_xlabel("Total de Downloads")
+    ax.set_ylabel("Categoria")
+    return fig
+
+```
+
+<div style='text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 0px;'>Top 10 Aplicativos com Mais Downloads</div>
+
+## Row
+
+``` {python}
+
+@render.data_frame
+def top10_apps_baixados():
+    df = dados_filtrados()
+
+    # Seleciona os 10 apps mais baixados
+    top10 = (df.sort_values(by="Installs", ascending=False).dropna(subset=["Installs"]).head(10))
+
+    # Seleção e renomeação das colunas para exibição
+    top10 = top10[[
+        "App", "Genres", "Installs", "Content Rating", "Rating", "Type", "Last Updated"
+    ]].rename(columns={
+        "App": "Aplicativo",
+        "Genres": "Categoria",
+        "Installs": "Downloads",
+        "Content Rating": "Classificação Etária",
+        "Rating": "Avaliação",
+        "Type": "Tipo",
+        "Last Updated": "Última Atualização"
+    })
+
+    return top10.reset_index(drop=True)
+```
+
+# Classificação
+
+``` {python}
+@render.plot
+def apps_por_classif_etaria():
+    df = dados_filtrados()  
+    fig, ax = plt.subplots(figsize=(10, 6)) 
+
+    if df.empty:  # Se não houver dados, mostra mensagem
+        ax.text(0.5, 0.5, "Sem dados filtrados", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    # Conta quantos apps existem por classificação etária
+    dados = df["Content Rating"].value_counts().reset_index()
+    dados.columns = ["Classificação", "Total"]
+
+    # Gráfico de barras com a paleta Google
+    sns.barplot(data=dados, x="Classificação", y="Total", palette=google_colors, ax=ax)
+    ax.set_title("Quantidade de Apps por Classificação Etária")
+    ax.set_xlabel("Classificação Etária")
+    ax.set_ylabel("Quantidade de Aplicativos")
+    ax.tick_params(axis="x", rotation=45)  # Rotaciona os rótulos no eixo X
+    return fig
+```
+
+## Row
+
+``` {python}
+@render.plot
+def grafico_atualizacoes_por_ano():
+    df = dados_filtrados()
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    if df.empty or "Last Updated" not in df.columns:
+        ax.text(0.5, 0.5, "Sem dados para o filtro", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    # Extrai o ano
+    df["Ano Atualização"] = df["Last Updated"].dt.year
+
+    # Conta atualizações por ano e ordena
+    contagem = df["Ano Atualização"].value_counts().sort_index()
+
+    # Plota gráfico de linha
+    sns.lineplot(x=contagem.index, y=contagem.values, marker="o", linewidth=2, color="#4285F4", ax=ax)
+    ax.set_title("Tendência de Atualizações por Ano")
+    ax.set_xlabel("Ano")
+    ax.set_ylabel("Número de Atualizações")
+    ax.grid(True)
+    return fig
+```
+
+# Notas
+
+``` {python}
+@render.plot
+def distribuicao_rating_kde():
+    df = dados_filtrados()
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    if df.empty or "Rating" not in df.columns:
+        ax.text(0.5, 0.5, "Sem dados de rating disponíveis", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    # Agrupa por categoria e calcula média de rating e soma de downloads
+    agrupado = df.groupby("Genres").agg({
+        "Rating": "mean",
+        "Installs": "sum"
+    }).dropna()
+
+    # Seleciona as 5 categorias com mais downloads
+    top5 = (
+        df.groupby("Genres")["Installs"].sum()
+        .sort_values(ascending=False)
+        .head(5)
+        .index
+    )
+
+    # Filtra apenas essas categorias
+    df_top = df[df["Genres"].isin(top5)]
+
+    # Gráfico de densidade (KDE) com uma linha para cada categoria
+    sns.kdeplot(
+        data=df_top,
+        x="Rating",
+        hue="Genres",
+        common_norm=False,
+        fill=False,
+        linewidth=2,
+        ax=ax
+    )
+
+    ax.set_title("Distribuição de Ratings por Categoria (Top 5 por Downloads)")
+    ax.set_xlabel("Rating")
+    ax.set_ylabel("Densidade")
+    ax.set_xlim(0, 5)
+    return fig
+```
+
+# Distribuição Geral
+
+``` {python}
+@render.plot
+def hist_categorias():
+    df = dados_filtrados()
+
+    fig, ax = plt.subplots(figsize=(15, 10))
+
+    if df.empty:
+        ax.text(0.5, 0.5, "Sem dados para os filtros selecionados", ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        return fig
+
+    # Conta a quantidade de apps por categoria
+    categorias = df["Genres"].value_counts().reset_index()
+    categorias.columns = ["Genres", "Quantidade"]
+
+      # Cria gráfico de barras horizontais com a paleta Google
+    sns.barplot(data=categorias, x="Quantidade", y="Genres", palette = my_palette, ax=ax)
+    ax.set_title("Distribuição de Categorias de Apps")
+    ax.set_xlabel("Quantidade de Aplicativos")
+    ax.set_ylabel("Categorias")
+    ax.tick_params(axis="x", rotation=45)
+
+    return fig
+```
+
+# Tabela Geral
+
+``` {python}
+@render.data_frame
+def tabela_apps():
+    df = dados_filtrados()
+
+    # Define as colunas a serem exibidas
+    colunas = [
+        "App", "Genres", "Content Rating", "Type",
+        "Price", "Installs", "Android Ver",
+        "Rating", "Last Updated", "Current Ver"
+    ]
+
+    # Copia essas colunas e renomeia para português
+    df_exibido = df[colunas].copy()
+
+    df_exibido = df_exibido.rename(columns={
+        "App": "Aplicativo",
+        "Genres": "Categoria",
+        "Content Rating": "Classificação Etária",
+        "Type": "Tipo",
+        "Price": "Preço",
+        "Installs": "Downloads",
+        "Android Ver": "Versão Android",
+        "Rating": "Avaliação",
+        "Last Updated": "Última Atualização",
+        "Current Ver": "Versão Atual"
+    })
+
+    return df_exibido.reset_index(drop=True)
+
+```
+
+
+
